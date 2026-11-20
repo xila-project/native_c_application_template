@@ -1,6 +1,6 @@
 [vars]
 app_name = "hello"
-core_revision = "e069753b6c489b583e80065a58888206e31b53f8"
+core_revision = "457d1a15eaecfb8c774e25825d86c321a39ba592"
 host_target = "x86_64-unknown-linux-gnu"
 uv_version = "0.12.19"
 clang_format_version = "19.1.7"
@@ -22,7 +22,8 @@ case "$XILA_SDK_TARGET" in
 esac
 
 revision="{{ vars.core_revision }}"
-core="$PWD/target/core/$revision"
+root="$PWD"
+core="$root/target/core/$revision"
 mkdir -p "$(dirname "$core")"
 # The target builds share Core's picolibc source cache.
 exec 9>"$core.lock"
@@ -38,6 +39,10 @@ if [ "$(git -C "$core" rev-parse --verify --quiet HEAD || true)" != "$revision" 
 fi
 (
   cd "$core"
+  # Stop mise's config search at this repository so its [tools] and [vars] stay
+  # out of Core's build. Its [env] is already exported to this task and still
+  # reaches Core (see the README).
+  export MISE_CEILING_PATHS="$root${MISE_CEILING_PATHS:+:$MISE_CEILING_PATHS}"
   if [ "${usage_install_packages:-false}" = true ]; then
     mise -E ci run "$packages"
   fi
