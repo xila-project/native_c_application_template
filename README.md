@@ -122,10 +122,12 @@ this README.
 
 ## License
 
-The template uses the [Apache License 2.0](license.md). If you redistribute a
-binary linked with picolibc, include the SDK's `COPYING.picolibc`. See Core's SDK
-documentation for the SDK and compiler runtime license details.
-[Xila native SDK](https://github.com/xila-project/core/blob/main/libraries/abi/application/sdk/README.md)
+This template is released under the [MIT License](LICENSE), except the
+`.github/brand/` header assets, which are covered by their own notice.
+Applications created from it may use any license. If you redistribute a binary
+linked with picolibc, include the SDK's `COPYING.picolibc`; the
+[Xila native SDK documentation](https://github.com/xila-project/core/blob/main/libraries/abi/application/sdk/README.md)
+gives the SDK and compiler runtime license details.
 
 <!-- xila:footer:start -->
 
