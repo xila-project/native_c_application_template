@@ -3,7 +3,14 @@
 #include <string.h>
 
 int main(int argc, char **argv) {
-  puts("Hello from Xila!");
+  // The environment comes from the launcher. getenv returns NULL for a name
+  // that is not set.
+  const char *name = getenv("USER");
+  if (name == NULL) {
+    name = getenv("NAME");
+  }
+  printf("Hello, %s, from Xila!\n", name != NULL ? name : "world");
+
   for (int i = 1; i < argc; ++i) {
     printf("arg: %s\n", argv[i]);
   }
