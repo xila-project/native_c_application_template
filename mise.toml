@@ -1,0 +1,119 @@
+[vars]
+app_name = "hello"
+core_revision = "e069753b6c489b583e80065a58888206e31b53f8"
+host_target = "x86_64-unknown-linux-gnu"
+uv_version = "0.12.19"
+clang_format_version = "19.1.7"
+taplo_version = "0.10.0"
+actionlint_version = "1.7.7"
+shellcheck_version = "0.11.0"
+
+[tasks."sdk:build"]
+description = "Build and unpack the pinned Xila C SDK for XILA_SDK_TARGET"
+usage = 'flag "--install-packages" help="Install Core’s Debian/Ubuntu SDK packages before building"'
+run = """
+set -eu
+export XILA_SDK_TARGET="${XILA_SDK_TARGET:-{{ vars.host_target }}}"
+case "$XILA_SDK_TARGET" in
+  x86_64-unknown-linux-gnu) packages=ci:packages-sdk ;;
+  thumbv7em-none-eabihf) packages=ci:packages-sdk-arm ;;
+  riscv32imac-unknown-none-elf) packages=ci:packages-sdk-riscv ;;
+  *) echo "Unsupported SDK target: $XILA_SDK_TARGET" >&2; exit 1 ;;
+esac
+
+revision="{{ vars.core_revision }}"
+core="$PWD/target/core/$revision"
+mkdir -p "$(dirname "$core")"
+# The target builds share Core's picolibc source cache.
+exec 9>"$core.lock"
+flock 9
+if [ ! -d "$core/.git" ]; then
+  git init --quiet "$core"
+fi
+if ! git -C "$core" cat-file -e "$revision^{commit}" 2>/dev/null; then
+  git -C "$core" fetch --depth=1 --no-tags https://github.com/xila-project/core.git "$revision"
+fi
+if [ "$(git -C "$core" rev-parse --verify --quiet HEAD || true)" != "$revision" ]; then
+  git -C "$core" checkout --quiet --detach "$revision"
+fi
+(
+  cd "$core"
+  if [ "${usage_install_packages:-false}" = true ]; then
+    mise -E ci run "$packages"
+  fi
+  mise run sdk:build
+)
+
+set -- "$core/target/sdk"/xila-sdk-*-"$XILA_SDK_TARGET".tar.zst
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+  echo "Expected one Xila SDK archive for $XILA_SDK_TARGET." >&2
+  exit 1
+fi
+sdk="$PWD/target/sdk/$XILA_SDK_TARGET"
+mkdir -p "$sdk"
+staging=$(mktemp -d "$sdk/sdk.XXXXXX")
+tar --zstd --extract --file "$1" --directory "$staging" --strip-components=1
+# Core currently ships the checker in its source tree.
+cp "$core/tools/sdk/check_elf.py" "$staging/check_elf.py"
+ln -s "${staging##*/}" "$staging/current"
+mv -Tf "$staging/current" "$sdk/current"
+"""
+
+[tasks.build]
+description = "Build the application for XILA_SDK_TARGET after sdk:build"
+run = """
+set -eu
+target="${XILA_SDK_TARGET:-{{ vars.host_target }}}"
+sdk="$PWD/target/sdk/$target/current"
+test -f "$sdk/cmake/xila-toolchain.cmake" || { echo "Run mise run sdk:build for $target first." >&2; exit 1; }
+# Keep the CMake cache with the SDK that configured it.
+sdk=$(cd "$sdk" && pwd -P)
+cmake -S . -B "$sdk/build" \\
+  -DCMAKE_TOOLCHAIN_FILE="$sdk/cmake/xila-toolchain.cmake" \\
+  -DXILA_APP_NAME="{{ vars.app_name }}" -DCMAKE_BUILD_TYPE=MinSizeRel
+cmake --build "$sdk/build"
+"""
+
+[tasks.check]
+description = "Check the built ELF against Xila's loader and target requirements"
+tools.uv = "{{ vars.uv_version }}"
+run = """
+set -eu
+target="${XILA_SDK_TARGET:-{{ vars.host_target }}}"
+case "$target" in
+  x86_64-unknown-linux-gnu) set -- --machine x86_64 ;;
+  thumbv7em-none-eabihf) set -- --machine arm --float-abi hard ;;
+  riscv32imac-unknown-none-elf) set -- --machine riscv32 --float-abi soft ;;
+  *) echo "Unsupported SDK target: $target" >&2; exit 1 ;;
+esac
+sdk="target/sdk/$target/current"
+test -f "$sdk/sdk.json" || { echo "Run mise run sdk:build for $target first." >&2; exit 1; }
+sdk=$(cd "$sdk" && pwd -P)
+abi=$(uv run --no-project python -c 'import json, sys; print(json.load(open(sys.argv[1]))["abi"])' "$sdk/sdk.json")
+uv run --no-project python "$sdk/check_elf.py" "$sdk/build/{{ vars.app_name }}.elf" --abi "$abi" "$@"
+"""
+
+[tasks."ci:format-rust"]
+description = "Satisfy the shared quality workflow for this C-only repository"
+run = "true"
+
+[tasks."ci:format-c"]
+description = "Check formatting of tracked C sources and headers"
+tools.uv = "{{ vars.uv_version }}"
+run = "git ls-files -z -- '*.c' '*.h' | xargs -0 -r uvx --from clang-format=={{ vars.clang_format_version }} clang-format --style=file --dry-run --Werror --"
+
+[tasks."format:c"]
+description = "Format tracked C sources and headers"
+tools.uv = "{{ vars.uv_version }}"
+run = "git ls-files -z -- '*.c' '*.h' | xargs -0 -r uvx --from clang-format=={{ vars.clang_format_version }} clang-format --style=file -i --"
+
+[tasks."ci:format-toml"]
+description = "Check TOML formatting"
+tools.taplo = "{{ vars.taplo_version }}"
+run = "taplo format --check mise.toml"
+
+[tasks."ci:lint-workflows"]
+description = "Lint GitHub Actions workflows"
+tools."aqua:rhysd/actionlint" = "{{ vars.actionlint_version }}"
+tools."aqua:koalaman/shellcheck" = "{{ vars.shellcheck_version }}"
+run = "actionlint"

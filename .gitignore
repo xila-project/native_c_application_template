@@ -1,0 +1,4 @@
+/target/
+/.mise/
+build/
+compile_commands.json
