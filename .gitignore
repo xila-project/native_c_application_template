@@ -1,4 +1,4 @@
 /target/
 /.mise/
-/.superpowers/
-/.dev-environment/
+build/
+compile_commands.json

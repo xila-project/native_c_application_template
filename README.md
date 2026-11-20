@@ -1,46 +1,67 @@
-# Xila native C application template
+<h1>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/brand/header-dark.svg">
+  <img src=".github/brand/header-light.svg" alt="Xila Native C app template — A C starter for your first native Xila application." width="1280">
+</picture>
+</h1>
 
 [Documentation](https://www.xila.dev/docs/) ·
-[Try Xila](https://platforms.xila.dev/) ·
 [Community](https://matrix.to/#/#xila:anneraud.fr)
 
 Build a small C application for the Xila embedded OS. The starter prints a
-greeting, lists its arguments, and reads `XILA_GREETING` from the Xila process
-environment. It returns status 0 by default and status 1 when the first argument
-is `--fail`.
+greeting and its command-line arguments to stdout. Pass `--fail` as the first
+argument to print a diagnostic to stderr and return status 1. Otherwise the app
+returns status 0.
 
 ## Requirements
 
-- Git, [mise](https://mise.jdx.dev/), Clang, LLD, LLVM tools (`llvm-ar`), CMake
-  3.20 or newer, Make, GNU tar, and zstd.
-- Network access for the Core submodule, mise tools, and Core's pinned picolibc
-  source. The SDK build uses Python 3.12 or newer and runs Meson and Ninja
-  through uv.
-- For Cortex-M4F, install `gcc-arm-none-eabi`. For RV32IMAC, install
-  `gcc-riscv64-unknown-elf` with the `rv32imac` / `ilp32` multilib. These
-  toolchains supply the compiler runtime (`libgcc.a`).
-
-## Quick start
-
-Use **Use this template** on GitHub or clone the repository directly. In your
-checkout, initialize Core and trust the two mise configurations after reviewing
-them.
+Install [mise](https://mise.jdx.dev/) and the host tools. On Debian or Ubuntu,
+run the following commands.
 
 ```sh
-git submodule update --init
+sudo apt-get update
+sudo apt-get install git clang lld llvm cmake make zstd python3
+# Install the compiler runtime for each embedded target you intend to build.
+sudo apt-get install gcc-arm-none-eabi
+sudo apt-get install gcc-riscv64-unknown-elf
+```
+
+Use CMake 3.20 or newer, GNU tar, and Python 3.12 or newer. If the distribution
+ships an older Python, set `UV_PYTHON=3.12` in your environment so uv can install
+and select Python 3.12. The RISC-V toolchain needs the `rv32imac` / `ilp32`
+multilib. CI delegates package installation to the pinned Core checkout's
+`ci:packages-sdk*` tasks.
+
+The first SDK build needs network access for the pinned Core source, the mise
+and uv tools, and Core's pinned picolibc source. Keep the caches and the checkout
+under `target/core/` to rebuild offline after the first build.
+
+## Create your application
+
+1. Select **Use this template** on GitHub and clone your new repository, or
+   clone this repository directly.
+2. Change `app_name` in `mise.toml` to the name of your executable.
+3. Edit `src/main.c` to implement your application.
+
+## Build and check
+
+Review the configuration before trusting it. The SDK task fetches Core at the
+exact `core_revision` in `mise.toml` and runs Core's SDK build.
+
+```sh
 mise trust
-(cd core && mise trust)
 mise run sdk:build
 mise run build
 mise run check
 ```
 
-The default target is Linux x86-64. The SDK is unpacked in
-`target/sdk/<target>/` and the application is written to
-`target/<target>/hello.elf`. Edit `src/main.c` to customize the example. After
-editing the C source, rerun `mise run build` and `mise run check`.
+The default target is Linux x86-64. Find the unpacked SDK through
+`target/sdk/<target>/current/` and the application at
+`target/sdk/<target>/current/build/<app_name>.elf`. CMake also writes
+`compile_commands.json` alongside the executable. Rerun `build` and `check`
+after editing the C source.
 
-Set `XILA_SDK_TARGET` for all three tasks to build for a different platform.
+Set `XILA_SDK_TARGET` for all three tasks to build for another target.
 
 ```sh
 export XILA_SDK_TARGET=thumbv7em-none-eabihf
@@ -55,38 +76,49 @@ mise run check
 | `thumbv7em-none-eabihf` | Arm Cortex-M4F, hard float |
 | `riscv32imac-unknown-none-elf` | RV32IMAC, soft float |
 
-## Run on Xila
+Run `mise run format:c` to format the tracked C sources and headers.
 
-Use a Xila build for the same target that enables Core's `native-dev` feature
-and registers `NativeFormat`. Copy `hello.elf`, a plain static-PIE ELF, to a
-filesystem mounted by that build and give it executable permissions in Xila's
-VFS. From a Xila shell on that build, invoke its path with arguments, for example
-`/hello.elf world`. Launch it with `XILA_GREETING` in the Xila process
-environment to print its value. The example uses a 64-byte buffer and accepts
-values up to 63 bytes.
+## Run through Core's host loader
 
-On Linux x86-64, use the same Xila build and VFS procedure. For a headless host
-test, Core's SDK test shows how to register `NativeFormat`, write the ELF into
-the test VFS, mark it executable and launch it with `execute_with`. Use
-`Launch::with_environment` to supply the test environment and `join` to read the
-exit status. [Core SDK host test](https://github.com/xila-project/core/blob/main/libraries/executable/tests/sdk.rs)
+No released Xila build runs native executables yet. Platform support is tracked
+in [xila-project/platforms#115](https://github.com/xila-project/platforms/issues/115).
+
+Today you can exercise the Linux x86-64 ELF through Core's
+[SDK host tests](https://github.com/xila-project/core/blob/main/libraries/executable/tests/sdk.rs).
+In a separate Core checkout at the SDK revision, run
+`cargo test --locked -p xila-executable --features native-dev --test sdk`.
+To load your own ELF, use the same test helpers to register `NativeFormat` and
+install the executable in the test VFS. Pass its VFS path and arguments to
+`execute_with`, redirect stdout and stderr to test files, and use `join` to
+read the exit status.
 
 ## Update the SDK pin
 
-With a clean Core submodule, fetch Core's `main`, check out the reviewed revision
-and record the new gitlink in this repository.
+Look up Core's main revision with
+`git ls-remote https://github.com/xila-project/core.git refs/heads/main`.
+Review the revision and put its full SHA in `core_revision` in `mise.toml`.
+Verify the pin on all three targets before committing it.
 
 ```sh
-git -C core fetch origin main
-git -C core checkout --detach FETCH_HEAD
-git add core
+for target in x86_64-unknown-linux-gnu thumbv7em-none-eabihf riscv32imac-unknown-none-elf; do
+  XILA_SDK_TARGET="$target" mise run sdk:build &&
+    XILA_SDK_TARGET="$target" mise run build &&
+    XILA_SDK_TARGET="$target" mise run check || exit 1
+done
+git add mise.toml
+git commit -m "Update the Xila Core SDK pin"
 ```
 
-Rebuild the SDK and rebuild and check the app for all three targets before
-committing the pin. Until SDK archives are published as release assets,
-`sdk:build` builds from Core and stages the toolchain and checker. That task
-owns SDK acquisition, so the application build and check use the same paths
-when release downloads become available. [SDK release tracking issue](https://github.com/xila-project/core/issues/762)
+`sdk:build` owns SDK acquisition and stages the toolchain and checker at the
+same paths on every build. Release archives are tracked in
+[xila-project/core#762](https://github.com/xila-project/core/issues/762).
+
+## Nanobom
+
+To publish vulnerability reports, create a Nanobom project for the repository,
+set the Actions secret `NANOBOM_TOKEN` to its upload token, and set the Actions
+variable `NANOBOM_ENABLED` to `true`. Use that project's public badge URL in
+this README.
 
 ## License
 
