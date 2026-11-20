@@ -85,8 +85,9 @@ clangd use it, link it into the repository root; Git already ignores that name.
 ln -s target/sdk/x86_64-unknown-linux-gnu/current/build/compile_commands.json compile_commands.json
 ```
 
-The link follows the `current` SDK, so it keeps working across SDK updates for
-that target. Link another target's file to get its flags instead.
+The link follows the `current` SDK. After an `sdk:build`, `current` points to a
+fresh SDK without a build directory, so the link is broken until the next
+`mise run build`. Link another target's file to get its flags instead.
 
 Set `XILA_SDK_TARGET` for all three tasks to build for another target.
 
@@ -127,14 +128,15 @@ Review the revision and put its full SHA in `core_revision` in `mise.toml`.
 Verify the pin on all three targets before committing it.
 
 ```sh
+sh -ec '
 for target in x86_64-unknown-linux-gnu thumbv7em-none-eabihf riscv32imac-unknown-none-elf; do
-  XILA_SDK_TARGET="$target" mise run sdk:build &&
-    XILA_SDK_TARGET="$target" mise run build &&
-    XILA_SDK_TARGET="$target" mise run check || break
-done
-git add mise.toml
-git commit -m "Update the Xila Core SDK pin"
+  XILA_SDK_TARGET="$target" mise run sdk:build
+  XILA_SDK_TARGET="$target" mise run build
+  XILA_SDK_TARGET="$target" mise run check
+done' && git add mise.toml && git commit -m "Update the Xila Core SDK pin"
 ```
+
+The commit only runs when every target builds and passes the check.
 
 `sdk:build` owns SDK acquisition and stages the toolchain and checker at the
 same paths on every build. Release archives are tracked in
@@ -144,12 +146,14 @@ Each pin leaves a checkout under `target/core/<sha>` and a staging directory
 `target/sdk/<target>/sdk.*` for every SDK build. Once you no longer need an
 older pin, you can delete its `target/core/<sha>` checkout and the `sdk.*`
 directories that `current` no longer points to, or the whole `target/`
-directory. The next `sdk:build` fetches what it needs again.
+directory, including the `target/core/<sha>.lock` files. The next `sdk:build`
+fetches what it needs again.
 
 `sdk:build` runs Core's own `mise run sdk:build` with mise's configuration search
-stopped at this repository, so this repository's `mise.toml` and any
-`[env]` or `[tools]` you add to it cannot change Core's build. Your global mise
-configuration still applies.
+stopped at this repository, so this repository's `[vars]` and `[tools]` don't
+change Core's build. Environment variables still reach it: mise exports this
+repository's `[env]` to the task, so avoid setting compiler variables such as
+`CC` or `CFLAGS` there. Your global mise configuration also still applies.
 
 ## Nanobom
 

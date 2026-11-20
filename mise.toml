@@ -39,9 +39,10 @@ if [ "$(git -C "$core" rev-parse --verify --quiet HEAD || true)" != "$revision" 
 fi
 (
   cd "$core"
-  # Stop mise's config search at this repository so its [env], [tools] and
-  # [vars] stay out of Core's build.
-  export MISE_CEILING_PATHS="$root"
+  # Stop mise's config search at this repository so its [tools] and [vars] stay
+  # out of Core's build. Its [env] is already exported to this task and still
+  # reaches Core (see the README).
+  export MISE_CEILING_PATHS="$root${MISE_CEILING_PATHS:+:$MISE_CEILING_PATHS}"
   if [ "${usage_install_packages:-false}" = true ]; then
     mise -E ci run "$packages"
   fi
