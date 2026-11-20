@@ -1,0 +1,83 @@
+[vars]
+sdk_abi = "0.1"
+host_target = "x86_64-unknown-linux-gnu"
+uv_version = "0.12.19"
+clang_format_version = "19.1.7"
+taplo_version = "0.10.0"
+actionlint_version = "1.7.7"
+shellcheck_version = "0.11.0"
+
+[tasks."sdk:build"]
+description = "Build and unpack the pinned Xila C SDK for XILA_SDK_TARGET"
+run = """
+set -eu
+export XILA_SDK_TARGET="${XILA_SDK_TARGET:-{{ vars.host_target }}}"
+(cd core && mise run sdk:build)
+
+sdk="target/sdk/$XILA_SDK_TARGET"
+archive="core/target/sdk/xila-sdk-{{ vars.sdk_abi }}-$XILA_SDK_TARGET.tar.zst"
+mkdir -p "$sdk"
+tar --zstd --extract --file "$archive" --directory "$sdk" --strip-components=1 --touch
+# Core currently ships the checker in its source tree.
+cp core/tools/sdk/check_elf.py "$sdk/check_elf.py"
+"""
+
+[tasks.build]
+description = "Build hello.elf for XILA_SDK_TARGET after sdk:build"
+run = """
+set -eu
+target="${XILA_SDK_TARGET:-{{ vars.host_target }}}"
+sdk="$PWD/target/sdk/$target"
+toolchain="$sdk/cmake/xila-toolchain.cmake"
+test -f "$toolchain" || { echo "Run mise run sdk:build for $target first." >&2; exit 1; }
+cmake -S . -B "target/$target" -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_BUILD_TYPE=MinSizeRel
+cmake --build "target/$target"
+"""
+
+[tasks.check]
+description = "Check the built ELF against Xila's loader and target requirements"
+tools.uv = "{{ vars.uv_version }}"
+run = """
+set -eu
+target="${XILA_SDK_TARGET:-{{ vars.host_target }}}"
+case "$target" in
+  x86_64-unknown-linux-gnu) set -- --machine x86_64 ;;
+  thumbv7em-none-eabihf) set -- --machine arm --float-abi hard ;;
+  riscv32imac-unknown-none-elf) set -- --machine riscv32 --float-abi soft ;;
+  *) echo "Unsupported SDK target: $target" >&2; exit 1 ;;
+esac
+uv run --no-project python "target/sdk/$target/check_elf.py" "target/$target/hello.elf" --abi {{ vars.sdk_abi }} "$@"
+"""
+
+[bootstrap.packages]
+"apt:clang" = { env = "ci" }
+"apt:lld" = { env = "ci" }
+"apt:llvm" = { env = "ci" }
+"apt:cmake" = { env = "ci" }
+"apt:zstd" = { env = "ci" }
+"apt:gcc-arm-none-eabi" = { env = "thumbv7em-none-eabihf" }
+"apt:gcc-riscv64-unknown-elf" = { env = "riscv32imac-unknown-none-elf" }
+
+[tasks."ci:packages"]
+description = "Install the LLVM build tools and the selected target's compiler runtime"
+run = 'mise -E "ci,${XILA_SDK_TARGET:-{{ vars.host_target }}}" bootstrap packages apply --manager apt --update --yes'
+
+[tasks."ci:format-rust"]
+description = "Satisfy the shared quality workflow for this C-only repository"
+run = "true"
+
+[tasks."ci:format-c"]
+description = "Check formatting of the C example"
+tools.uv = "{{ vars.uv_version }}"
+run = "uvx --from clang-format=={{ vars.clang_format_version }} clang-format --style=LLVM --dry-run --Werror src/main.c"
+
+[tasks."ci:format-toml"]
+description = "Check TOML formatting"
+tools.taplo = "{{ vars.taplo_version }}"
+run = "taplo format --check mise.toml"
+
+[tasks."ci:lint-workflows"]
+description = "Lint GitHub Actions workflows"
+tools."aqua:rhysd/actionlint" = "{{ vars.actionlint_version }}"
+tools."aqua:koalaman/shellcheck" = "{{ vars.shellcheck_version }}"
+run = "actionlint"

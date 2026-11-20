@@ -1,0 +1,44 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    uses: xila-project/workspace/.github/workflows/quality.yml@a2b2570fd670644d92d294ebad61152dffcd7fb1
+    with:
+      extra-task: ci:format-c
+
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - thumbv7em-none-eabihf
+          - riscv32imac-unknown-none-elf
+    env:
+      MISE_ENV: ci
+      XILA_SDK_TARGET: ${{ matrix.target }}
+    steps:
+      - name: "Setup | Checkout sources and Core"
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: "Setup | Activate mise"
+        uses: jdx/mise-action@v5.2.8
+      - name: "Setup | SDK build packages"
+        run: mise run ci:packages
+      - name: "Build | Xila SDK"
+        run: mise run sdk:build
+      - name: "Build | Native application"
+        run: mise run build
+      - name: "Test | ELF loader contract"
+        run: mise run check
