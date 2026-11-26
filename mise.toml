@@ -1,6 +1,8 @@
 [vars]
 app_name = "hello"
-core_revision = "457d1a15eaecfb8c774e25825d86c321a39ba592"
+core_revision = "4785f3931f295dd24b87a7f58204cb676d960589"
+# Entry symbol of the statically linked archive: a C identifier derived from app_name.
+linked_entry = "xila_linked_{{ vars.app_name }}"
 host_target = "x86_64-unknown-linux-gnu"
 uv_version = "0.12.19"
 clang_format_version = "19.1.7"
@@ -79,6 +81,37 @@ cmake -S . -B "$sdk/build" \\
 cmake --build "$sdk/build"
 """
 
+[tasks."build:linked"]
+description = "Build the application as a statically linked archive for XILA_SDK_TARGET after sdk:build"
+tools.uv = "{{ vars.uv_version }}"
+run = """
+set -eu
+target="${XILA_SDK_TARGET:-{{ vars.host_target }}}"
+sdk="target/sdk/$target/current"
+test -f "$sdk/cmake/xila-toolchain.cmake" || { echo "Run mise run sdk:build for $target first." >&2; exit 1; }
+# Keep the CMake cache with the SDK that configured it.
+sdk=$(cd "$sdk" && pwd -P)
+cmake -S . -B "$sdk/build" \\
+  -DCMAKE_TOOLCHAIN_FILE="$sdk/cmake/xila-toolchain.cmake" \\
+  -DXILA_APP_NAME="{{ vars.app_name }}" -DCMAKE_BUILD_TYPE=MinSizeRel
+# The object library is shared by the ELF and the archive: build only it here.
+cmake --build "$sdk/build" --target "{{ vars.app_name }}_objects"
+objdir="$sdk/build/CMakeFiles/{{ vars.app_name }}_objects.dir"
+# CMAKE_SYSTEM_NAME is Generic, so CMake names objects .obj; match .o too for UNIX-like setups.
+objects=$(find "$objdir" -type f \\( -name '*.o' -o -name '*.obj' \\) | LC_ALL=C sort)
+if [ -z "$objects" ]; then
+  echo "No object files under $objdir." >&2
+  exit 1
+fi
+# link-archive runs from the pinned Core checkout: it resolves its own root there and
+# reads nothing else from it (only `build` reads Core's mise.toml).
+core="$PWD/target/core/{{ vars.core_revision }}"
+test -f "$core/tools/sdk/build.py" || { echo "Run mise run sdk:build first: $core/tools/sdk/build.py is missing." >&2; exit 1; }
+# shellcheck disable=SC2086
+uv run --no-project python "$core/tools/sdk/build.py" link-archive \\
+  --sdk "$sdk" --entry "{{ vars.linked_entry }}" --output "$sdk/build/lib{{ vars.app_name }}.a" $objects
+"""
+
 [tasks.check]
 description = "Check the built ELF against Xila's loader and target requirements"
 tools.uv = "{{ vars.uv_version }}"
@@ -96,6 +129,53 @@ test -f "$sdk/sdk.json" || { echo "Run mise run sdk:build for $target first." >&
 sdk=$(cd "$sdk" && pwd -P)
 abi=$(uv run --no-project python -c 'import json, sys; print(json.load(open(sys.argv[1]))["abi"])' "$sdk/sdk.json")
 uv run --no-project python "$sdk/check_elf.py" "$sdk/build/{{ vars.app_name }}.elf" --abi "$abi" "$@"
+"""
+
+[tasks."check:linked"]
+description = "Check the linked archive: only the entry is a global defined symbol, nothing is undefined"
+run = """
+set -eu
+target="${XILA_SDK_TARGET:-{{ vars.host_target }}}"
+sdk="target/sdk/$target/current"
+test -f "$sdk/sdk.json" || { echo "Run mise run sdk:build for $target first." >&2; exit 1; }
+sdk=$(cd "$sdk" && pwd -P)
+archive="$sdk/build/lib{{ vars.app_name }}.a"
+test -f "$archive" || { echo "Run mise run build:linked for $target first." >&2; exit 1; }
+entry="{{ vars.linked_entry }}"
+# llvm-nm from PATH, or next to clang: the same lookup as the SDK build.py find_tool.
+nm=$(command -v llvm-nm 2>/dev/null || true)
+if [ -z "$nm" ] && command -v clang >/dev/null 2>&1; then
+  candidate=$(clang -print-prog-name=llvm-nm)
+  case "$candidate" in
+    /*) if [ -x "$candidate" ]; then nm=$candidate; fi ;;
+  esac
+fi
+if [ -z "$nm" ]; then
+  echo "llvm-nm not found; install LLVM (clang, lld, llvm-ar)" >&2
+  exit 1
+fi
+# The only global defined symbol must be the entry, a text (T) symbol.
+# Restrict to actual global symbol classes ([ABDRTVW]) and --extern-only so
+# target debug labels (e.g. RISC-V `.LLST*` / `.Ldebug_*` with type N) are ignored.
+defined_raw=$("$nm" --extern-only --defined-only --format=posix "$archive")
+defined=$(printf '%s\n' "$defined_raw" | awk 'NF >= 2 && $2 ~ /^[ABDRTVW]$/ { print $1, $2 }')
+if [ "$defined" != "$entry T" ]; then
+  echo "check:linked: the only global defined symbol of $archive must be '$entry T', got:" >&2
+  printf '%s\n' "$defined" >&2
+  exit 1
+fi
+# No weak undefined (w/v) symbol may survive, and no strong undefined (U) one except
+# the symbols the firmware itself provides. Capture llvm-nm first so a failure is not
+# hidden behind a pipe without pipefail.
+undef_raw=$("$nm" --undefined-only --format=posix "$archive")
+weak=$(printf '%s\n' "$undef_raw" | awk 'NF >= 2 && ($2 == "w" || $2 == "v") { print $1 }')
+strong=$(printf '%s\n' "$undef_raw" | awk 'NF >= 2 && $2 == "U" && $1 != "__xila_current_startup" { print $1 }')
+if [ -n "$weak" ] || [ -n "$strong" ]; then
+  echo "check:linked: $archive must have no weak undefined (w/v) and no unexpected strong undefined (U) symbol, got:" >&2
+  printf '%s\n' "$weak" "$strong" >&2
+  exit 1
+fi
+echo "check:linked: $archive exposes only $entry (T) as a global symbol and nothing undefined"
 """
 
 [tasks."ci:format-rust"]

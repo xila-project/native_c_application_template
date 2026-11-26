@@ -104,6 +104,33 @@ mise run check
 | `thumbv7em-none-eabihf` | Arm Cortex-M4F, hard float |
 | `riscv32imac-unknown-none-elf` | RV32IMAC, soft float |
 
+### Two output modes
+
+`mise run build` links the application into a loadable static-PIE ELF
+(`build/<app_name>.elf`), which `mise run check` validates against the loader
+contract. `mise run build:linked` compiles the same sources through the shared
+object target and packs them with Core's `tools/sdk/build.py link-archive` into
+`build/lib<app_name>.a`: a statically linked archive whose only global defined
+symbol is the entry `xila_linked_<app_name>`. `mise run check:linked` verifies
+that contract with `llvm-nm`: one global `T` symbol, and no weak or unexpected
+strong undefined symbol. CI runs both modes for every target.
+
+```sh
+mise run build:linked
+mise run check:linked
+```
+
+Mount the archive in the firmware with `xila-executable`'s linked-program
+support:
+
+```rust
+xila::executable::linked_executable!(unsafe pub Hello => xila_linked_hello, exclusive, stack_size = 64 * 1024);
+```
+
+`xila_linked_start` resets the SDK and POSIX runtime state on every launch,
+including after a cancellation, while application-owned C `static` variables
+persist across launches of the same program.
+
 Run `mise run format:c` to format the tracked C sources and headers.
 
 ## Run through Core's host loader
@@ -133,6 +160,8 @@ for target in x86_64-unknown-linux-gnu thumbv7em-none-eabihf riscv32imac-unknown
   XILA_SDK_TARGET="$target" mise run sdk:build
   XILA_SDK_TARGET="$target" mise run build
   XILA_SDK_TARGET="$target" mise run check
+  XILA_SDK_TARGET="$target" mise run build:linked
+  XILA_SDK_TARGET="$target" mise run check:linked
 done' && git add mise.toml && git commit -m "Update the Xila Core SDK pin"
 ```
 

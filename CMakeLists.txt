@@ -9,5 +9,9 @@ if(NOT XILA_APP_NAME)
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-add_executable("${XILA_APP_NAME}" src/main.c)
-target_compile_features("${XILA_APP_NAME}" PRIVATE c_std_11)
+# One object library feeds both outputs: the loadable static-PIE ELF below and the
+# statically linked archive that `mise run build:linked` packs with Core's link-archive.
+# The toolchain compiles every object with -fPIE, which both links accept.
+add_library("${XILA_APP_NAME}_objects" OBJECT src/main.c)
+target_compile_features("${XILA_APP_NAME}_objects" PRIVATE c_std_11)
+add_executable("${XILA_APP_NAME}" $<TARGET_OBJECTS:${XILA_APP_NAME}_objects>)

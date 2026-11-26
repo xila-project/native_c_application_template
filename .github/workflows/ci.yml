@@ -39,6 +39,10 @@ jobs:
         run: mise run build
       - name: "Test | ELF loader contract"
         run: mise run check
+      - name: "Build | Linked archive"
+        run: mise run build:linked
+      - name: "Test | Linked archive contract"
+        run: mise run check:linked
 
   required:
     name: required
