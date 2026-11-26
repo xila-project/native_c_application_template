@@ -144,7 +144,7 @@ test -f "$archive" || { echo "Run mise run build:linked for $target first." >&2;
 entry="{{ vars.linked_entry }}"
 # llvm-nm from PATH, or next to clang: the same lookup as the SDK build.py find_tool.
 nm=$(command -v llvm-nm 2>/dev/null || true)
-if [ -z "$nm" ]; then
+if [ -z "$nm" ] && command -v clang >/dev/null 2>&1; then
   candidate=$(clang -print-prog-name=llvm-nm)
   case "$candidate" in
     /*) if [ -x "$candidate" ]; then nm=$candidate; fi ;;
@@ -155,16 +155,21 @@ if [ -z "$nm" ]; then
   exit 1
 fi
 # The only global defined symbol must be the entry, a text (T) symbol.
-defined=$("$nm" --defined-only --format=posix "$archive" | awk 'NF >= 2 && $2 ~ /^[A-Z]$/ { print $1, $2 }')
+# Restrict to actual global symbol classes ([ABDRTVW]) and --extern-only so
+# target debug labels (e.g. RISC-V `.LLST*` / `.Ldebug_*` with type N) are ignored.
+defined_raw=$("$nm" --extern-only --defined-only --format=posix "$archive")
+defined=$(printf '%s\n' "$defined_raw" | awk 'NF >= 2 && $2 ~ /^[ABDRTVW]$/ { print $1, $2 }')
 if [ "$defined" != "$entry T" ]; then
   echo "check:linked: the only global defined symbol of $archive must be '$entry T', got:" >&2
   printf '%s\n' "$defined" >&2
   exit 1
 fi
 # No weak undefined (w/v) symbol may survive, and no strong undefined (U) one except
-# the symbols the firmware itself provides.
-weak=$("$nm" --undefined-only --format=posix "$archive" | awk 'NF >= 2 && ($2 == "w" || $2 == "v") { print $1 }')
-strong=$("$nm" --undefined-only --format=posix "$archive" | awk 'NF >= 2 && $2 == "U" && $1 != "__xila_current_startup" { print $1 }')
+# the symbols the firmware itself provides. Capture llvm-nm first so a failure is not
+# hidden behind a pipe without pipefail.
+undef_raw=$("$nm" --undefined-only --format=posix "$archive")
+weak=$(printf '%s\n' "$undef_raw" | awk 'NF >= 2 && ($2 == "w" || $2 == "v") { print $1 }')
+strong=$(printf '%s\n' "$undef_raw" | awk 'NF >= 2 && $2 == "U" && $1 != "__xila_current_startup" { print $1 }')
 if [ -n "$weak" ] || [ -n "$strong" ]; then
   echo "check:linked: $archive must have no weak undefined (w/v) and no unexpected strong undefined (U) symbol, got:" >&2
   printf '%s\n' "$weak" "$strong" >&2
